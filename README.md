@@ -8,7 +8,11 @@ I kept buying asset packs and then spending way too long trying to sort the mode
 
 Arranges selected objects into a non-overlapping grid. Settings for the number of columns, the gap between objects, and sort by name or size.
 
-<img width="1000" height="563" alt="UsageExample" src="https://github.com/user-attachments/assets/7c10ac89-3bd7-4477-b2e4-1abd2d7a8592" />
+<img width="1000" height="563" alt="Usage Example" src="https://github.com/user-attachments/assets/7c10ac89-3bd7-4477-b2e4-1abd2d7a8592" />
+
+## Sort Options
+
+![Sorting Methods](docs/sort_methods.png)
 
 ## Installation
 
