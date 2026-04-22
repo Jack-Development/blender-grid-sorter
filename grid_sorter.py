@@ -1,9 +1,7 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 bl_info = {
     "name": "Smart Grid Sorter",
     "author": "Jack Shilton",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > Grid Tools",
     "description": "Arranges selected objects into a clean, overlap-free grid layout",
@@ -19,12 +17,29 @@ from bpy.types import Operator, Panel, PropertyGroup
 
 
 class GRIDSORTER_PG_settings(PropertyGroup):
+    layout_mode: EnumProperty(
+        name="Layout",
+        description="Whether to use a fixed column count or a maximum row width",
+        items=[
+            ('COLUMNS', "Columns", "Pack objects into a fixed number of columns"),
+            ('ROW_WIDTH', "Row Width", "Fit as many objects as possible into each row before wrapping"),
+        ],
+        default='COLUMNS',
+    )
     columns: IntProperty(
         name="Columns",
         description="Number of columns in the grid layout",
         default=5,
         min=1,
         soft_max=20,
+    )
+    row_width: FloatProperty(
+        name="Row Width",
+        description="Maximum width of each row (in scene units) before wrapping to the next row",
+        default=20.0,
+        min=0.01,
+        soft_max=200.0,
+        unit='LENGTH',
     )
     margin: FloatProperty(
         name="Gap",
@@ -38,12 +53,13 @@ class GRIDSORTER_PG_settings(PropertyGroup):
         name="Sort By",
         description="How to order objects before placing them in the grid",
         items=[
-            ('NAME',      "Name",            "Sort alphabetically by object name"),
+            ('NAME', "Name", "Sort alphabetically by object name"),
             ('SIZE_DESC', "Size (Large → Small)", "Sort by footprint area, largest first"),
-            ('SIZE_ASC',  "Size (Small → Large)", "Sort by footprint area, smallest first"),
+            ('SIZE_ASC', "Size (Small → Large)", "Sort by footprint area, smallest first"),
         ],
         default='NAME',
     )
+
 
 class OBJECT_OT_grid_sort(Operator):
     bl_idname = "object.grid_sort"
@@ -62,28 +78,7 @@ class OBJECT_OT_grid_sort(Operator):
 
         return min_x, max_x, min_y, max_y, max_x - min_x, max_y - min_y
 
-    def execute(self, context):
-        props  = context.scene.grid_sorter_props
-        cols   = props.columns
-        margin = props.margin
-
-        selected = context.selected_objects
-        if not selected:
-            self.report({'WARNING'}, "No objects selected")
-            return {'CANCELLED'}
-
-        selection_set = set(selected)
-        objects = [obj for obj in selected if obj.parent not in selection_set]
-
-        if props.sort_mode == 'NAME':
-            objects.sort(key=lambda o: o.name.lower())
-        else:
-            reverse = (props.sort_mode == 'SIZE_DESC')
-            objects.sort(
-                key=lambda o: o.dimensions.x * o.dimensions.y,
-                reverse=reverse,
-            )
-
+    def _place_columns(self, objects, cols, margin):
         col_widths  = [0.0] * cols
         row_heights = []
         current_row_max = 0.0
@@ -108,13 +103,73 @@ class OBJECT_OT_grid_sort(Operator):
 
             min_x, _, _, max_y, *_ = self._world_bounds(obj)
 
-            target_x = col_offsets[col]
-            target_y = -row_offsets[row]
+            obj.location.x = col_offsets[col] + (obj.location.x - min_x)
+            obj.location.y = -row_offsets[row] + (obj.location.y - max_y)
 
-            obj.location.x = target_x + (obj.location.x - min_x)
-            obj.location.y = target_y + (obj.location.y - max_y)
+    def _place_row_width(self, objects, row_width, margin):
+        rows = []
+        current_row = []
+        current_row_w = 0.0
+
+        for obj in objects:
+            *_, w, h = self._world_bounds(obj)
+            obj_slot = w + margin
+
+            if current_row and current_row_w + obj_slot > row_width:
+                rows.append(current_row)
+                current_row = []
+                current_row_w = 0.0
+
+            current_row.append(obj)
+            current_row_w += obj_slot
+
+        if current_row:
+            rows.append(current_row)
+
+        y_offset = 0.0
+        for row_objs in rows:
+            row_height = 0.0
+            x_offset = 0.0
+
+            for obj in row_objs:
+                min_x, _, _, max_y, w, h = self._world_bounds(obj)
+
+                obj.location.x = x_offset + (obj.location.x - min_x)
+                obj.location.y = -y_offset + (obj.location.y - max_y)
+
+                x_offset += w + margin
+                row_height = max(row_height, h + margin)
+
+            y_offset += row_height
+
+    def execute(self, context):
+        props  = context.scene.grid_sorter_props
+        margin = props.margin
+
+        selected = context.selected_objects
+        if not selected:
+            self.report({'WARNING'}, "No objects selected")
+            return {'CANCELLED'}
+
+        selection_set = set(selected)
+        objects = [obj for obj in selected if obj.parent not in selection_set]
+
+        if props.sort_mode == 'NAME':
+            objects.sort(key=lambda o: o.name.lower())
+        else:
+            reverse = (props.sort_mode == 'SIZE_DESC')
+            objects.sort(
+                key=lambda o: o.dimensions.x * o.dimensions.y,
+                reverse=reverse,
+            )
+
+        if props.layout_mode == 'COLUMNS':
+            self._place_columns(objects, props.columns, margin)
+        else:
+            self._place_row_width(objects, props.row_width, margin)
 
         return {'FINISHED'}
+
 
 class VIEW3D_PT_grid_sorter(Panel):
     bl_space_type  = 'VIEW_3D'
@@ -131,11 +186,18 @@ class VIEW3D_PT_grid_sorter(Panel):
 
         col = layout.column(align=True)
         col.prop(props, "sort_mode")
-        col.prop(props, "columns")
+        col.prop(props, "layout_mode")
+
+        if props.layout_mode == 'COLUMNS':
+            col.prop(props, "columns")
+        else:
+            col.prop(props, "row_width")
+
         col.prop(props, "margin")
 
         layout.separator()
         layout.operator("object.grid_sort", icon='GRID')
+
 
 classes = (
     GRIDSORTER_PG_settings,
